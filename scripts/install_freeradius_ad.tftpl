@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+
+echo "[1/5] 安裝必要套件..."
+apt update && apt install -y freeradius winbind libpam-winbind krb5-user samba
+
+echo "[2/5] 設定 krb5.conf..."
+cat <<EOF > /etc/krb5.conf
+[libdefaults]
+    default_realm = ${ad_domain_netbios}
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+EOF
+
+echo "[3/5] 加入 AD 網域..."
+echo "${ad_admin_password}" | net ads join -U ${ad_admin_user}@${ad_domain_name} -S ${ad_domain_name} -w ${ad_domain_netbios}
+
+echo "[4/5] 設定 FreeRADIUS 整合 ntlm_auth 驗證..."
+echo 'ntlm_auth = "/usr/bin/ntlm_auth --request-nt-key --domain='"${ad_domain_netbios}"' --username=%%{mschap:User-Name} --challenge=%%{mschap:Challenge} --nt-response=%%{mschap:NT-Response}"' > /etc/freeradius/3.0/mods-available/mschap
+ln -sf /etc/freeradius/3.0/mods-available/mschap /etc/freeradius/3.0/mods-enabled/
+
+cat <<EOF > /etc/freeradius/3.0/clients.conf
+client localvpn {
+  ipaddr = ${vpn_server_ip}
+  secret = ${radius_secret}
+}
+EOF
+
+echo "[5/5] 啟動服務..."
+systemctl restart winbind
+systemctl restart freeradius
+systemctl enable freeradius
+
+echo "FreeRADIUS 安裝完成，已綁定 AD：${ad_domain_name}"
+echo "請確保來自 VPN Server (${vpn_server_ip}) 的請求使用 secret=${radius_secret}"
